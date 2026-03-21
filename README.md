@@ -1,36 +1,55 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# InternLog
 
-## Getting Started
+Internship time tracking and monthly reflections — [Next.js](https://nextjs.org) App Router, Tailwind CSS, Auth.js (credentials), Drizzle + SQLite for future data.
 
-First, run the development server:
+## Setup
+
+### 1. Environment
+
+Copy [`.env.example`](.env.example) to `.env.local` and set:
+
+| Variable | Description |
+| -------- | ----------- |
+| `AUTH_SECRET` | Random string (e.g. `openssl rand -hex 32`). |
+| `AUTH_ALLOWED_EMAIL` | Only this email may sign in. |
+| `AUTH_PASSWORD_HASH_B64` | Base64 of your bcrypt hash (see below — **not** the raw `$2a$…` string). |
+| `AUTH_URL` | App URL (e.g. `http://localhost:3000`). |
+| `DATABASE_URL` | SQLite path, default `file:./data/internlog.db`. |
+
+Generate a password hash:
+
+```bash
+node scripts/hash-password.cjs "your-password"
+```
+
+Paste the printed `AUTH_PASSWORD_HASH_B64=…` line into `.env`. Next.js expands `$` in env files, so a raw bcrypt hash in `AUTH_PASSWORD_HASH` is broken; the script outputs base64 to avoid that.
+
+### 2. Database (optional for auth)
+
+Auth uses **JWT sessions** — SQLite is for future internship tables. Create the DB file and `app_meta` table:
+
+```bash
+mkdir data
+npm run db:push
+```
+
+### 3. Run
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000). You will be redirected to `/login` until you sign in.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `npm run dev` — development server
+- `npm run build` — production build
+- `npm run db:push` — apply Drizzle schema to SQLite
+- `npm run db:studio` — Drizzle Studio (inspect DB)
 
 ## Learn More
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Next.js Documentation](https://nextjs.org/docs)
+- [Auth.js](https://authjs.dev/)
+- [Drizzle ORM](https://orm.drizzle.team/)
