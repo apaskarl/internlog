@@ -1,7 +1,7 @@
 "use client";
 
 import { Icon } from "@iconify/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { TimelogTableRow } from "@/lib/types/timelog";
 import { toLocalDateString } from "@/lib/time-local";
 
@@ -12,6 +12,9 @@ type Props = {
   rows: TimelogTableRow[];
   loading?: boolean;
   onMonthChange?: (year: number, month: number) => void;
+  /** When set, days with a log open the editor (read-only UI if false). */
+  supabaseConfigured?: boolean;
+  onEditRow?: (row: TimelogTableRow) => void;
 };
 
 function buildDateMap(rows: TimelogTableRow[]): Map<string, TimelogTableRow> {
@@ -54,12 +57,24 @@ function isAfterToday(d: Date): boolean {
   return copy > today;
 }
 
-export function TimelogCalendar({ rows, loading, onMonthChange }: Props) {
+export function TimelogCalendar({
+  rows,
+  loading,
+  onMonthChange,
+  supabaseConfigured = false,
+  onEditRow,
+}: Props) {
   const [viewDate, setViewDate] = useState(() => new Date());
   const dateMap = useMemo(() => buildDateMap(rows), [rows]);
 
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth();
+
+  useEffect(() => {
+    onMonthChange?.(viewDate.getFullYear(), viewDate.getMonth());
+    // Initial month only; prev/next call onMonthChange directly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync parent once on mount
+  }, []);
   const now = new Date();
   const days = useMemo(() => getDaysInMonth(year, month), [year, month]);
 
@@ -89,12 +104,15 @@ export function TimelogCalendar({ rows, loading, onMonthChange }: Props) {
   });
 
   return (
-    <div className="rounded-2xl border border-(--card-border) bg-(--card) p-4 shadow-sm sm:p-5">
+    <div
+      className="rounded-2xl border border-(--card-border) bg-(--card) p-4 shadow-sm sm:p-5"
+      aria-busy={loading}
+    >
       <div className="mb-4 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-foreground">
           {monthLabel}
           {loading ? (
-            <span className="ml-2 text-xs font-normal text-(--muted)">Loading…</span>
+            <span className="sr-only">Loading calendar entries</span>
           ) : null}
         </h3>
         <div className="flex items-center gap-1.5">
@@ -135,6 +153,26 @@ export function TimelogCalendar({ rows, loading, onMonthChange }: Props) {
           const dateKey = isEmpty ? null : toLocalDateString(d);
           const row = dateKey ? dateMap.get(dateKey) : null;
 
+          const showSkeleton =
+            Boolean(loading) && !isEmpty && !beforeStart;
+
+          if (showSkeleton) {
+            return (
+              <div
+                key={i}
+                className={`flex min-h-[4rem] min-w-0 flex-col rounded-lg px-1.5 py-2 ${
+                  future
+                    ? "animate-pulse bg-background/35 ring-1 ring-(--card-border)/25"
+                    : "animate-pulse bg-background/55 ring-1 ring-(--card-border)/40"
+                }`}
+                aria-hidden
+              >
+                <span className="mx-auto mt-1 h-3 w-6 rounded bg-(--card-border)/50" />
+                <span className="mx-auto mt-2 h-2 w-10 rounded bg-(--card-border)/35" />
+              </div>
+            );
+          }
+
           const isComplete = row?.status === "complete";
           const isPartial = row?.status === "partial";
           const isToday =
@@ -142,6 +180,9 @@ export function TimelogCalendar({ rows, loading, onMonthChange }: Props) {
             d.getDate() === now.getDate() &&
             d.getMonth() === now.getMonth() &&
             d.getFullYear() === now.getFullYear();
+
+          const canEditDay =
+            Boolean(row) && supabaseConfigured && typeof onEditRow === "function";
 
           let cellClass =
             "flex min-h-[4rem] min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-1.5 py-2 text-xs font-medium transition-colors ";
@@ -179,7 +220,18 @@ export function TimelogCalendar({ rows, loading, onMonthChange }: Props) {
               title={title}
               aria-label={isEmpty ? undefined : dateKey ?? undefined}
             >
-              {isEmpty ? null : (
+              {isEmpty ? null : row && canEditDay ? (
+                <button
+                  type="button"
+                  onClick={() => onEditRow(row)}
+                  className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-0.5 rounded-md bg-transparent p-0 text-inherit cursor-pointer hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-(--accent)"
+                >
+                  <span>{d.getDate()}</span>
+                  <span className="truncate max-w-full text-[9px] font-normal opacity-90">
+                    {row.netDuration}
+                  </span>
+                </button>
+              ) : (
                 <>
                   <span>{d.getDate()}</span>
                   {row ? (

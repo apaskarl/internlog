@@ -20,6 +20,11 @@ const NAV_ITEMS = [
     label: "Monthly reports",
     icon: "mdi:notebook-outline",
   },
+  {
+    href: "/documents",
+    label: "Documents",
+    icon: "mdi:folder-file-outline",
+  },
 ] as const;
 
 function headerForPath(pathname: string) {
@@ -33,6 +38,12 @@ function headerForPath(pathname: string) {
     return {
       title: "Monthly reports",
       subtitle: "Learnings, tasks & reflections by month",
+    };
+  }
+  if (pathname === "/documents") {
+    return {
+      title: "Documents",
+      subtitle: "Uploaded PDFs, MOA, NDA & internship paperwork",
     };
   }
   return {
@@ -127,21 +138,21 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        <div className="border-t border-[var(--card-border)] p-4">
-          <div className="flex items-center gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--background)]/80 p-3">
+        <div className="border-t border-[var(--card-border)] px-4 pb-5 pt-5">
+          <div className="flex items-center gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element -- external avatar URL */}
             <img
               src={USER_PROFILE.avatarUrl}
               alt={USER_PROFILE.name}
               width={44}
               height={44}
-              className="h-11 w-11 shrink-0 rounded-full border border-[var(--card-border)] bg-[var(--background)] object-cover"
+              className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-[var(--accent)]/30 ring-offset-2 ring-offset-[var(--card)]"
             />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold leading-tight text-[var(--foreground)]">
+              <p className="truncate text-sm font-semibold leading-snug text-[var(--foreground)]">
                 {USER_PROFILE.name}
               </p>
-              <p className="mt-1 text-xs text-[var(--muted)]">
+              <p className="mt-0.5 text-xs tabular-nums text-[var(--muted)]">
                 ID {USER_PROFILE.idNumber}
               </p>
             </div>

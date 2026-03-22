@@ -38,6 +38,8 @@ const PAGE_SIZE = 25;
 export async function getAttendanceRowsPaginated(
   page: number = 1,
   pageSize: number = PAGE_SIZE,
+  /** When true, page 1 is the oldest rows (matches “oldest first” list sort). */
+  dateAscending: boolean = false,
 ): Promise<{
   rows: AttendanceDbRow[];
   totalCount: number;
@@ -51,14 +53,15 @@ export async function getAttendanceRowsPaginated(
   try {
     const supabase = await createClient();
     const from = (page - 1) * pageSize;
+    const asc = dateAscending;
 
     const [countRes, dataRes] = await Promise.all([
       supabase.from(ATTENDANCE_TABLE).select("*", { count: "exact", head: true }),
       supabase
         .from(ATTENDANCE_TABLE)
         .select(ATTENDANCE_SELECT)
-        .order("date", { ascending: false })
-        .order("id", { ascending: false })
+        .order("date", { ascending: asc })
+        .order("id", { ascending: asc })
         .range(from, from + pageSize - 1),
     ]);
 

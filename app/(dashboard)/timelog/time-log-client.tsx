@@ -14,13 +14,20 @@ import type { TimelogTableRow } from "@/lib/types/timelog";
 import { useWorkSession } from "@/components/work-session-provider";
 import { WorkSessionPanel } from "./work-session-panel";
 import { TimelogCalendar } from "./timelog-calendar";
+import { EditAttendanceDialog } from "./edit-attendance-dialog";
 import {
   fetchAttendancePage,
   fetchAttendanceForMonth,
   fetchAttendanceStats,
 } from "@/app/actions/attendance";
+import {
+  buildMonthFilterOptions,
+  groupTimelogRowsByWeek,
+} from "@/lib/timelog-week-group";
 
 const PAGE_SIZE = 25;
+
+const STORAGE_HISTORY_VIEW = "internlog:timelog-history-view";
 
 type Props = {
   supabaseConfigured: boolean;
@@ -30,6 +37,15 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
   const session = useWorkSession();
   const [publishToast, setPublishToast] = useState(false);
   const [historyView, setHistoryView] = useState<"calendar" | "list">("calendar");
+  const [listMonthFilter, setListMonthFilter] = useState<string>("all");
+  const [listSortOrder, setListSortOrder] = useState<"date-desc" | "date-asc">(
+    "date-desc",
+  );
+  const [editingRow, setEditingRow] = useState<TimelogTableRow | null>(null);
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const d = new Date();
+    return { y: d.getFullYear(), m: d.getMonth() };
+  });
 
   // Stats (today, this week) from aggregated API; weekBuckets stored for live session merge
   const [stats, setStats] = useState<{
@@ -58,17 +74,44 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
   const now = new Date();
   const chips = formatTimelogDateChips(now);
 
+  const monthFilterOptions = useMemo(() => buildMonthFilterOptions(), []);
+
+  const persistHistoryView = useCallback((v: "calendar" | "list") => {
+    setHistoryView(v);
+    try {
+      localStorage.setItem(STORAGE_HISTORY_VIEW, v);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      try {
+        const hv = localStorage.getItem(STORAGE_HISTORY_VIEW);
+        if (hv === "calendar" || hv === "list") setHistoryView(hv);
+        localStorage.removeItem("internlog:timelog-list-month-filter");
+      } catch {
+        /* ignore */
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
+
   // Load stats on mount
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- bootstrap stats from Supabase / env */
     if (!supabaseConfigured) {
-      setStats({
-        remainingMs: DEFAULT_DAILY_TARGET_MS,
-        loggedTodayMs: 0,
-        weekMs: 0,
-        chips,
-        weekBuckets: [],
+      queueMicrotask(() => {
+        setStats({
+          remainingMs: DEFAULT_DAILY_TARGET_MS,
+          loggedTodayMs: 0,
+          weekMs: 0,
+          chips,
+          weekBuckets: [],
+        });
+        setStatsLoading(false);
       });
-      setStatsLoading(false);
       return;
     }
 
@@ -146,15 +189,17 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
   const loadListPage = useCallback(
     async (page: number, append: boolean) => {
       if (!supabaseConfigured) return;
+      const dateAscending = listSortOrder === "date-asc";
       setListLoading(true);
-      const res = await fetchAttendancePage(page, PAGE_SIZE);
+      const res = await fetchAttendancePage(page, PAGE_SIZE, dateAscending);
       setListError(res.error);
       setListTotalCount(res.totalCount);
       setListHasMore(res.hasMore);
       setListRows((prev) => (append ? [...prev, ...res.rows] : res.rows));
+      if (!append) setListPage(page);
       setListLoading(false);
     },
-    [supabaseConfigured],
+    [supabaseConfigured, listSortOrder],
   );
 
   const loadCalendarMonth = useCallback(
@@ -169,18 +214,44 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
     [supabaseConfigured],
   );
 
-  useEffect(() => {
-    if (historyView === "list" && listRows.length === 0 && !listLoading) {
-      loadListPage(1, false);
-    }
-  }, [historyView, loadListPage]);
+  const loadListMonth = useCallback(
+    async (year: number, month: number) => {
+      if (!supabaseConfigured) return;
+      setListLoading(true);
+      setListError(null);
+      const res = await fetchAttendanceForMonth(year, month);
+      setListError(res.error);
+      setListRows(res.rows);
+      setListTotalCount(res.rows.length);
+      setListHasMore(false);
+      setListPage(1);
+      setListLoading(false);
+    },
+    [supabaseConfigured],
+  );
 
   useEffect(() => {
-    if (historyView === "calendar" && calendarRows.length === 0 && !calendarLoading) {
-      const d = new Date();
-      loadCalendarMonth(d.getFullYear(), d.getMonth());
-    }
-  }, [historyView, loadCalendarMonth]);
+    if (historyView !== "list" || !supabaseConfigured) return;
+    const id = requestAnimationFrame(() => {
+      if (listMonthFilter === "all") {
+        void loadListPage(1, false);
+      } else {
+        const parts = listMonthFilter.split("-");
+        const y = Number(parts[0]);
+        const mo = Number(parts[1]) - 1;
+        if (!Number.isFinite(y) || mo < 0 || mo > 11) return;
+        void loadListMonth(y, mo);
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [
+    historyView,
+    listMonthFilter,
+    listSortOrder,
+    supabaseConfigured,
+    loadListPage,
+    loadListMonth,
+  ]);
 
   const handleLoadMore = () => {
     const next = listPage + 1;
@@ -188,20 +259,29 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
     loadListPage(next, true);
   };
 
-  const handleCalendarMonthChange = (year: number, month: number) => {
-    loadCalendarMonth(year, month);
-  };
+  const handleCalendarMonthChange = useCallback(
+    (year: number, month: number) => {
+      setCalendarMonth({ y: year, m: month });
+      loadCalendarMonth(year, month);
+    },
+    [loadCalendarMonth],
+  );
 
   useEffect(() => {
     const onPublished = () => {
       setPublishToast(true);
       loadStats();
       if (historyView === "calendar") {
-        loadCalendarMonth(now.getFullYear(), now.getMonth());
+        loadCalendarMonth(calendarMonth.y, calendarMonth.m);
+      } else if (listMonthFilter === "all") {
+        void loadListPage(1, false);
       } else {
-        setListRows([]);
-        setListPage(1);
-        loadListPage(1, false);
+        const parts = listMonthFilter.split("-");
+        const y = Number(parts[0]);
+        const mo = Number(parts[1]) - 1;
+        if (Number.isFinite(y) && mo >= 0 && mo <= 11) {
+          void loadListMonth(y, mo);
+        }
       }
     };
     const loadStats = async () => {
@@ -227,7 +307,16 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
     window.addEventListener("internlog-attendance-published", onPublished);
     return () =>
       window.removeEventListener("internlog-attendance-published", onPublished);
-  }, [historyView, supabaseConfigured, loadCalendarMonth, loadListPage]);
+  }, [
+    historyView,
+    supabaseConfigured,
+    loadCalendarMonth,
+    loadListPage,
+    calendarMonth.y,
+    calendarMonth.m,
+    listMonthFilter,
+    loadListMonth,
+  ]);
 
   useEffect(() => {
     if (!publishToast) return;
@@ -235,16 +324,44 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
     return () => window.clearTimeout(t);
   }, [publishToast]);
 
+  const listMonthLabel = useMemo(() => {
+    if (listMonthFilter === "all") return "";
+    const d = new Date(`${listMonthFilter}-01T12:00:00`);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  }, [listMonthFilter]);
+
+  const weekGroups = useMemo(() => {
+    const order = listSortOrder === "date-desc" ? "desc" : "asc";
+    const g = groupTimelogRowsByWeek(listRows, order);
+    if (g.length > 0 || listRows.length === 0) return g;
+    return [
+      {
+        weekStartIso: "other",
+        label: "Other",
+        rows: listRows,
+      },
+    ];
+  }, [listRows, listSortOrder]);
+
   const historySubtitle = listError ?? calendarError
     ? `Could not load data: ${listError ?? calendarError}`
     : !supabaseConfigured
       ? "Add Supabase env vars to load rows from the attendance table."
       : historyView === "list"
-        ? `Showing ${listRows.length} of ${listTotalCount} row(s).`
+        ? listMonthFilter === "all"
+          ? `Grouped by week (Mon–Sun). Sort: ${listSortOrder === "date-desc" ? "latest first" : "oldest first"}. Showing ${listRows.length} of ${listTotalCount} row(s).`
+          : `Grouped by week (Mon–Sun). Sort: ${listSortOrder === "date-desc" ? "latest first" : "oldest first"}. ${listMonthLabel}: ${listRows.length} row(s).`
         : "Calendar loads the visible month only.";
 
   return (
     <PageContainer className="flex flex-col gap-8 lg:gap-10">
+      <EditAttendanceDialog
+        row={editingRow}
+        open={editingRow != null}
+        onClose={() => setEditingRow(null)}
+        supabaseConfigured={supabaseConfigured}
+      />
       {publishToast ? (
         <div
           className="rounded-xl border border-emerald-500/35 bg-emerald-500/12 px-4 py-3 text-sm text-emerald-100"
@@ -316,6 +433,11 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
             </p>
           </div>
         </div>
+        {statsError ? (
+          <p className="text-xs text-red-400" role="alert">
+            Stats: {statsError}
+          </p>
+        ) : null}
 
         <WorkSessionPanel
           session={session}
@@ -346,7 +468,7 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
             >
               <button
                 type="button"
-                onClick={() => setHistoryView("calendar")}
+                onClick={() => persistHistoryView("calendar")}
                 aria-pressed={historyView === "calendar"}
                 aria-label="Calendar view"
                 className={`cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
@@ -360,7 +482,7 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
               </button>
               <button
                 type="button"
-                onClick={() => setHistoryView("list")}
+                onClick={() => persistHistoryView("list")}
                 aria-pressed={historyView === "list"}
                 aria-label="List view"
                 className={`cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
@@ -373,6 +495,53 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
                 List
               </button>
             </div>
+            {historyView === "list" ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="timelog-month-filter"
+                    className="text-xs font-medium text-(--muted)"
+                  >
+                    Month
+                  </label>
+                  <select
+                    id="timelog-month-filter"
+                    value={listMonthFilter}
+                    onChange={(e) => setListMonthFilter(e.target.value)}
+                    className="cursor-pointer rounded-lg border border-(--card-border) bg-background px-3 py-1.5 text-xs font-medium text-foreground"
+                    aria-label="Filter list by month"
+                  >
+                    {monthFilterOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="timelog-sort"
+                    className="text-xs font-medium text-(--muted)"
+                  >
+                    Sort
+                  </label>
+                  <select
+                    id="timelog-sort"
+                    value={listSortOrder}
+                    onChange={(e) =>
+                      setListSortOrder(
+                        e.target.value === "date-asc" ? "date-asc" : "date-desc",
+                      )
+                    }
+                    className="cursor-pointer rounded-lg border border-(--card-border) bg-background px-3 py-1.5 text-xs font-medium text-foreground"
+                    aria-label="Sort entries by date"
+                  >
+                    <option value="date-desc">Latest entry first</option>
+                    <option value="date-asc">Oldest entry first</option>
+                  </select>
+                </div>
+              </>
+            ) : null}
             <button
               type="button"
               className="cursor-pointer rounded-lg border border-(--card-border) bg-background px-3 py-1.5 text-xs font-medium text-(--muted) opacity-60 transition-colors hover:opacity-80 disabled:cursor-not-allowed"
@@ -397,6 +566,8 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
             rows={calendarRows}
             loading={calendarLoading}
             onMonthChange={handleCalendarMonthChange}
+            supabaseConfigured={supabaseConfigured}
+            onEditRow={(row) => setEditingRow(row)}
           />
         ) : (
           <div className="overflow-hidden rounded-2xl border border-(--card-border) bg-(--card) shadow-sm">
@@ -411,19 +582,22 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
                     <th className="px-4 py-3 font-semibold lg:px-5">Gross</th>
                     <th className="px-4 py-3 font-semibold lg:px-5">Net</th>
                     <th className="px-4 py-3 font-semibold lg:px-5">Status</th>
+                    <th className="px-4 py-3 text-right font-semibold lg:px-5">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-(--card-border)">
                   {listLoading && listRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-(--muted) lg:px-5">
+                      <td colSpan={8} className="px-4 py-10 text-center text-sm text-(--muted) lg:px-5">
                         Loading…
                       </td>
                     </tr>
                   ) : listRows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={8}
                         className="px-4 py-10 text-center text-sm text-(--muted) lg:px-5"
                       >
                         No rows to show. Check Supabase RLS policies and that{" "}
@@ -431,58 +605,86 @@ export function TimeLogClient({ supabaseConfigured }: Props) {
                       </td>
                     </tr>
                   ) : (
-                    listRows.map((row) => (
+                    weekGroups.flatMap((group) => [
                       <tr
-                        key={row.id}
-                        className="transition-colors hover:bg-background/40"
+                        key={`week-${group.weekStartIso}`}
+                        className="border-b border-(--card-border) bg-background/70"
                       >
-                        <td className="px-4 py-4 font-medium text-foreground lg:px-5">
-                          {row.dayLabel}
+                        <td
+                          colSpan={8}
+                          className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-(--muted) lg:px-5"
+                        >
+                          {group.label}
                         </td>
-                        <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
-                          {row.clockIn}
-                        </td>
-                        <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
-                          {row.clockOut}
-                        </td>
-                        <td className="px-4 py-4 font-mono text-(--muted) tabular-nums lg:px-5">
-                          {row.breakTime}
-                        </td>
-                        <td className="px-4 py-4 font-mono text-(--muted) tabular-nums lg:px-5">
-                          {row.duration}
-                        </td>
-                        <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
-                          {row.netDuration}
-                        </td>
-                        <td className="px-4 py-4 lg:px-5">
-                          {row.status === "complete" ? (
-                            <span className="inline-flex items-center rounded-full bg-emerald-500/12 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                              Complete
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-full bg-amber-500/12 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-400">
-                              Pending
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
+                      </tr>,
+                      ...group.rows.map((row) => (
+                        <tr
+                          key={row.id}
+                          className="transition-colors hover:bg-background/40"
+                        >
+                          <td className="px-4 py-4 font-medium text-foreground lg:px-5">
+                            {row.dayLabel}
+                          </td>
+                          <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
+                            {row.clockIn}
+                          </td>
+                          <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
+                            {row.clockOut}
+                          </td>
+                          <td className="px-4 py-4 font-mono text-(--muted) tabular-nums lg:px-5">
+                            {row.breakTime}
+                          </td>
+                          <td className="px-4 py-4 font-mono text-(--muted) tabular-nums lg:px-5">
+                            {row.duration}
+                          </td>
+                          <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
+                            {row.netDuration}
+                          </td>
+                          <td className="px-4 py-4 lg:px-5">
+                            {row.status === "complete" ? (
+                              <span className="inline-flex items-center rounded-full bg-emerald-500/12 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                                Complete
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full bg-amber-500/12 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-400">
+                                Pending
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-4 text-right lg:px-5">
+                            <button
+                              type="button"
+                              disabled={!supabaseConfigured}
+                              onClick={() => setEditingRow(row)}
+                              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-(--card-border) bg-background px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-background/80 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Icon
+                                icon="mdi:pencil-outline"
+                                className="h-4 w-4"
+                                aria-hidden
+                              />
+                              Edit
+                            </button>
+                          </td>
+                        </tr>
+                      )),
+                    ])
                   )}
                 </tbody>
               </table>
             </div>
-            {listHasMore && (
+            {listMonthFilter === "all" && listHasMore ? (
               <div className="border-t border-(--card-border) p-3 text-center">
                 <button
                   type="button"
                   onClick={handleLoadMore}
                   disabled={listLoading}
-                  className="rounded-lg border border-(--card-border) bg-background px-4 py-2 text-sm font-medium text-(--muted) transition-colors hover:bg-background/80 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="cursor-pointer rounded-lg border border-(--card-border) bg-background px-4 py-2 text-sm font-medium text-(--muted) transition-colors hover:bg-background/80 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {listLoading ? "Loading…" : "Load more"}
                 </button>
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </section>

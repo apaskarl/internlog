@@ -2,6 +2,12 @@ export type TimelogTableRow = {
   id: string;
   /** `YYYY-MM-DD` from Supabase `date`, for stats. */
   dateKey: string | null;
+  /** Same as `dateKey` when present; for edit forms. */
+  dateRaw: string | null;
+  /** Postgres `time` strings (`HH:MM:SS`), for edit forms. */
+  timeInRaw: string | null;
+  timeOutRaw: string | null;
+  breakMinutes: number | null;
   /** Net work in ms when clock-out exists; otherwise `0`. */
   netWorkMs: number;
   dayLabel: string;

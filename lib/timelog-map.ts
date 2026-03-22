@@ -61,9 +61,14 @@ export function mapAttendanceToTimelogRows(rows: AttendanceDbRow[]): TimelogTabl
     const { gross, net } = grossNetFromAttendance(payload);
     const netMs = netWorkMsFromAttendance(payload);
     const hasOut = Boolean(row.time_out);
+    const dateKey = dateKeyFromAttendance(row.date);
     return {
       id: String(row.id),
-      dateKey: dateKeyFromAttendance(row.date),
+      dateKey,
+      dateRaw: dateKey,
+      timeInRaw: row.time_in ?? null,
+      timeOutRaw: row.time_out ?? null,
+      breakMinutes: breakMin,
       netWorkMs: netMs ?? 0,
       dayLabel: formatDayLabel(row.date),
       clockIn: formatTimeForUi(row.time_in),

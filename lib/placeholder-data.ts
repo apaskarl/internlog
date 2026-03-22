@@ -246,3 +246,104 @@ export const PLACEHOLDER_MONTHLY_REPORTS: MonthlyReport[] = [
       "February: complete security training and ship a docs-only PR (README or internal guide).",
   },
 ];
+
+/** Sample uploads for the Documents page (not real files). */
+export type UploadedDocument = {
+  id: string;
+  title: string;
+  category: "monthly_report" | "legal" | "onboarding" | "hr";
+  categoryLabel: string;
+  fileName: string;
+  fileExt: "pdf" | "docx";
+  sizeLabel: string;
+  uploadedAt: string;
+  description: string;
+  status: "signed" | "pending_review" | "archived";
+};
+
+export const PLACEHOLDER_DOCUMENTS: UploadedDocument[] = [
+  {
+    id: "d1",
+    title: "Monthly report — March 2026",
+    category: "monthly_report",
+    categoryLabel: "Monthly report",
+    fileName: "Monthly_Report_2026-03.pdf",
+    fileExt: "pdf",
+    sizeLabel: "842 KB",
+    uploadedAt: "Mar 28, 2026",
+    description: "Reflection, hours summary, and mentor notes for March.",
+    status: "signed",
+  },
+  {
+    id: "d2",
+    title: "Monthly report — February 2026",
+    category: "monthly_report",
+    categoryLabel: "Monthly report",
+    fileName: "Monthly_Report_2026-02.pdf",
+    fileExt: "pdf",
+    sizeLabel: "756 KB",
+    uploadedAt: "Feb 26, 2026",
+    description: "Mid-internship checkpoint and goals for Q2.",
+    status: "signed",
+  },
+  {
+    id: "d3",
+    title: "Monthly report — January 2026",
+    category: "monthly_report",
+    categoryLabel: "Monthly report",
+    fileName: "Monthly_Report_2026-01.pdf",
+    fileExt: "pdf",
+    sizeLabel: "690 KB",
+    uploadedAt: "Jan 29, 2026",
+    description: "First month summary and onboarding wrap-up.",
+    status: "archived",
+  },
+  {
+    id: "d4",
+    title: "Memorandum of Agreement (MOA)",
+    category: "legal",
+    categoryLabel: "Legal",
+    fileName: "MOA_Internship_2026_Signed.pdf",
+    fileExt: "pdf",
+    sizeLabel: "1.2 MB",
+    uploadedAt: "Jan 6, 2026",
+    description: "Signed MOA between your school, the host company, and you.",
+    status: "signed",
+  },
+  {
+    id: "d5",
+    title: "Non-Disclosure Agreement (NDA)",
+    category: "legal",
+    categoryLabel: "Legal",
+    fileName: "NDA_Standard_2026.pdf",
+    fileExt: "pdf",
+    sizeLabel: "428 KB",
+    uploadedAt: "Jan 6, 2026",
+    description: "Confidentiality obligations for systems, code, and customer data.",
+    status: "signed",
+  },
+  {
+    id: "d6",
+    title: "Internship offer & acceptance",
+    category: "hr",
+    categoryLabel: "HR",
+    fileName: "Offer_Letter_Acceptance.pdf",
+    fileExt: "pdf",
+    sizeLabel: "312 KB",
+    uploadedAt: "Jan 4, 2026",
+    description: "Signed offer letter and start date confirmation.",
+    status: "signed",
+  },
+  {
+    id: "d7",
+    title: "Company handbook acknowledgment",
+    category: "onboarding",
+    categoryLabel: "Onboarding",
+    fileName: "Handbook_Acknowledgment_2026.docx",
+    fileExt: "docx",
+    sizeLabel: "88 KB",
+    uploadedAt: "Jan 8, 2026",
+    description: "Acknowledgment of policies; keep a copy for your records.",
+    status: "pending_review",
+  },
+];
