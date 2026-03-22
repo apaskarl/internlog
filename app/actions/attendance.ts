@@ -4,6 +4,13 @@ import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { ATTENDANCE_TABLE } from "@/lib/supabase/attendance";
 import { createClient, isSupabaseConfigured } from "@/lib/supabase/server";
+import {
+  getAttendanceRowsForMonth,
+  getAttendanceRowsPaginated,
+} from "@/lib/get-attendance-rows";
+import { getAttendanceStats } from "@/lib/get-attendance-stats";
+import { mapAttendanceToTimelogRows } from "@/lib/timelog-map";
+import type { TimelogTableRow } from "@/lib/types/timelog";
 
 export type PublishAttendanceInput = {
   date: string;
@@ -115,9 +122,44 @@ export async function publishAttendance(
     }
 
     revalidatePath("/timelog");
+    revalidatePath("/");
     return { ok: true };
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     return { ok: false, error: message };
   }
+}
+
+/** Server action: paginated list rows for timelog. */
+export async function fetchAttendancePage(
+  page: number,
+  pageSize: number = 25,
+): Promise<{
+  rows: TimelogTableRow[];
+  totalCount: number;
+  hasMore: boolean;
+  error: string | null;
+}> {
+  const { rows, totalCount, hasMore, error } =
+    await getAttendanceRowsPaginated(page, pageSize);
+  return {
+    rows: mapAttendanceToTimelogRows(rows),
+    totalCount,
+    hasMore,
+    error,
+  };
+}
+
+/** Server action: calendar rows for a specific month. */
+export async function fetchAttendanceForMonth(
+  year: number,
+  month: number,
+): Promise<{ rows: TimelogTableRow[]; error: string | null }> {
+  const { rows, error } = await getAttendanceRowsForMonth(year, month);
+  return { rows: mapAttendanceToTimelogRows(rows), error };
+}
+
+/** Server action: aggregated stats for timelog header (today, week). */
+export async function fetchAttendanceStats() {
+  return getAttendanceStats();
 }

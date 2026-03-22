@@ -10,6 +10,8 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 type Props = {
   rows: TimelogTableRow[];
+  loading?: boolean;
+  onMonthChange?: (year: number, month: number) => void;
 };
 
 function buildDateMap(rows: TimelogTableRow[]): Map<string, TimelogTableRow> {
@@ -52,7 +54,7 @@ function isAfterToday(d: Date): boolean {
   return copy > today;
 }
 
-export function TimelogCalendar({ rows }: Props) {
+export function TimelogCalendar({ rows, loading, onMonthChange }: Props) {
   const [viewDate, setViewDate] = useState(() => new Date());
   const dateMap = useMemo(() => buildDateMap(rows), [rows]);
 
@@ -69,12 +71,16 @@ export function TimelogCalendar({ rows }: Props) {
 
   const goPrev = () => {
     if (!canPrev) return;
-    setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1));
+    const prev = new Date(year, month - 1);
+    setViewDate(prev);
+    onMonthChange?.(prev.getFullYear(), prev.getMonth());
   };
 
   const goNext = () => {
     if (!canNext) return;
-    setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + 1));
+    const next = new Date(year, month + 1);
+    setViewDate(next);
+    onMonthChange?.(next.getFullYear(), next.getMonth());
   };
 
   const monthLabel = viewDate.toLocaleDateString(undefined, {
@@ -85,7 +91,12 @@ export function TimelogCalendar({ rows }: Props) {
   return (
     <div className="rounded-2xl border border-(--card-border) bg-(--card) p-4 shadow-sm sm:p-5">
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-foreground">{monthLabel}</h3>
+        <h3 className="text-sm font-semibold text-foreground">
+          {monthLabel}
+          {loading ? (
+            <span className="ml-2 text-xs font-normal text-(--muted)">Loading…</span>
+          ) : null}
+        </h3>
         <div className="flex items-center gap-1.5">
           <button
             type="button"

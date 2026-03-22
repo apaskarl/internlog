@@ -1,70 +1,233 @@
 "use client";
 
 import { Icon } from "@iconify/react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageContainer } from "@/components/page-container";
 import { formatDurationMs } from "@/lib/attendance-time";
 import {
   DEFAULT_DAILY_TARGET_MS,
   formatTimelogDateChips,
   remainingTargetMs,
-  totalNetMsThisWeek,
-  totalNetMsToday,
 } from "@/lib/timelog-stats";
 import { toLocalDateString } from "@/lib/time-local";
 import type { TimelogTableRow } from "@/lib/types/timelog";
 import { useWorkSession } from "@/components/work-session-provider";
 import { WorkSessionPanel } from "./work-session-panel";
 import { TimelogCalendar } from "./timelog-calendar";
+import {
+  fetchAttendancePage,
+  fetchAttendanceForMonth,
+  fetchAttendanceStats,
+} from "@/app/actions/attendance";
+
+const PAGE_SIZE = 25;
 
 type Props = {
-  initialRows: TimelogTableRow[];
-  fetchError: string | null;
   supabaseConfigured: boolean;
 };
 
-export function TimeLogClient({
-  initialRows,
-  fetchError,
-  supabaseConfigured,
-}: Props) {
+export function TimeLogClient({ supabaseConfigured }: Props) {
   const session = useWorkSession();
   const [publishToast, setPublishToast] = useState(false);
   const [historyView, setHistoryView] = useState<"calendar" | "list">("calendar");
 
-  const stats = useMemo(() => {
-    const now = new Date();
-    const todayYmd = toLocalDateString(now);
-    const loggedTodayMs = totalNetMsToday(
-      initialRows,
-      session.state,
-      session.derived.netMs,
-      todayYmd,
-    );
-    const remainingMs = remainingTargetMs(DEFAULT_DAILY_TARGET_MS, loggedTodayMs);
-    const weekMs = totalNetMsThisWeek(
-      initialRows,
-      session.state,
-      session.derived.netMs,
-      now,
-    );
-    const chips = formatTimelogDateChips(now);
-    return {
-      remainingMs,
-      loggedTodayMs,
-      weekMs,
-      chips,
+  // Stats (today, this week) from aggregated API; weekBuckets stored for live session merge
+  const [stats, setStats] = useState<{
+    remainingMs: number;
+    loggedTodayMs: number;
+    weekMs: number;
+    chips: { weekLabel: string; dateLabel: string };
+    weekBuckets: { netMs: number }[];
+  } | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+
+  // List: paginated rows
+  const [listRows, setListRows] = useState<TimelogTableRow[]>([]);
+  const [listPage, setListPage] = useState(1);
+  const [listTotalCount, setListTotalCount] = useState(0);
+  const [listHasMore, setListHasMore] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [listLoading, setListLoading] = useState(false);
+
+  // Calendar: month-scoped rows
+  const [calendarRows, setCalendarRows] = useState<TimelogTableRow[]>([]);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+
+  const now = new Date();
+  const chips = formatTimelogDateChips(now);
+
+  // Load stats on mount
+  useEffect(() => {
+    if (!supabaseConfigured) {
+      setStats({
+        remainingMs: DEFAULT_DAILY_TARGET_MS,
+        loggedTodayMs: 0,
+        weekMs: 0,
+        chips,
+        weekBuckets: [],
+      });
+      setStatsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setStatsLoading(true);
+    fetchAttendanceStats()
+      .then((s) => {
+        if (cancelled) return;
+        const todayIdx = (now.getDay() + 6) % 7;
+        const loggedTodayFromDb = s.weekBuckets[todayIdx]?.netMs ?? 0;
+        const sessionNet =
+          session.state.phase !== "idle" &&
+          toLocalDateString(new Date(session.state.timeInMs)) ===
+            toLocalDateString(now)
+            ? session.derived.netMs
+            : 0;
+        const loggedTodayMs = loggedTodayFromDb + sessionNet;
+        const weekFromDb = s.weekBuckets.reduce((sum, b) => sum + b.netMs, 0);
+        const weekSession =
+          session.state.phase !== "idle"
+            ? session.derived.netMs
+            : 0;
+        setStats({
+          remainingMs: remainingTargetMs(DEFAULT_DAILY_TARGET_MS, loggedTodayMs),
+          loggedTodayMs,
+          weekMs: weekFromDb + weekSession,
+          chips: formatTimelogDateChips(now),
+          weekBuckets: s.weekBuckets.map((b) => ({ netMs: b.netMs })),
+        });
+        setStatsError(s.error);
+      })
+      .finally(() => {
+        if (!cancelled) setStatsLoading(false);
+      });
+    return () => {
+      cancelled = true;
     };
-  }, [initialRows, session.state, session.derived.netMs]);
+  }, [supabaseConfigured]);
+
+  // Derive display stats (merge live session into DB stats)
+  const displayStats = useMemo(() => {
+    const base = stats ?? {
+      remainingMs: DEFAULT_DAILY_TARGET_MS,
+      loggedTodayMs: 0,
+      weekMs: 0,
+      chips,
+      weekBuckets: [],
+    };
+    if (!base.weekBuckets?.length) {
+      return {
+        remainingMs: base.remainingMs,
+        loggedTodayMs: base.loggedTodayMs,
+        weekMs: base.weekMs,
+        chips: base.chips,
+      };
+    }
+    const todayIdx = (now.getDay() + 6) % 7;
+    const loggedTodayFromDb = base.weekBuckets[todayIdx]?.netMs ?? 0;
+    const sessionNet =
+      session.state.phase !== "idle" &&
+      toLocalDateString(new Date(session.state.timeInMs)) === toLocalDateString(now)
+        ? session.derived.netMs
+        : 0;
+    const loggedTodayMs = loggedTodayFromDb + sessionNet;
+    const weekFromDb = base.weekBuckets.reduce((s, b) => s + b.netMs, 0);
+    const weekSession = session.state.phase !== "idle" ? session.derived.netMs : 0;
+    return {
+      remainingMs: remainingTargetMs(DEFAULT_DAILY_TARGET_MS, loggedTodayMs),
+      loggedTodayMs,
+      weekMs: weekFromDb + weekSession,
+      chips: base.chips,
+    };
+  }, [stats, session.state, session.derived.netMs, chips]);
+
+  const loadListPage = useCallback(
+    async (page: number, append: boolean) => {
+      if (!supabaseConfigured) return;
+      setListLoading(true);
+      const res = await fetchAttendancePage(page, PAGE_SIZE);
+      setListError(res.error);
+      setListTotalCount(res.totalCount);
+      setListHasMore(res.hasMore);
+      setListRows((prev) => (append ? [...prev, ...res.rows] : res.rows));
+      setListLoading(false);
+    },
+    [supabaseConfigured],
+  );
+
+  const loadCalendarMonth = useCallback(
+    async (year: number, month: number) => {
+      if (!supabaseConfigured) return;
+      setCalendarLoading(true);
+      const res = await fetchAttendanceForMonth(year, month);
+      setCalendarError(res.error);
+      setCalendarRows(res.rows);
+      setCalendarLoading(false);
+    },
+    [supabaseConfigured],
+  );
+
+  useEffect(() => {
+    if (historyView === "list" && listRows.length === 0 && !listLoading) {
+      loadListPage(1, false);
+    }
+  }, [historyView, loadListPage]);
+
+  useEffect(() => {
+    if (historyView === "calendar" && calendarRows.length === 0 && !calendarLoading) {
+      const d = new Date();
+      loadCalendarMonth(d.getFullYear(), d.getMonth());
+    }
+  }, [historyView, loadCalendarMonth]);
+
+  const handleLoadMore = () => {
+    const next = listPage + 1;
+    setListPage(next);
+    loadListPage(next, true);
+  };
+
+  const handleCalendarMonthChange = (year: number, month: number) => {
+    loadCalendarMonth(year, month);
+  };
 
   useEffect(() => {
     const onPublished = () => {
       setPublishToast(true);
+      loadStats();
+      if (historyView === "calendar") {
+        loadCalendarMonth(now.getFullYear(), now.getMonth());
+      } else {
+        setListRows([]);
+        setListPage(1);
+        loadListPage(1, false);
+      }
+    };
+    const loadStats = async () => {
+      if (!supabaseConfigured) return;
+      const s = await fetchAttendanceStats();
+      const todayIdx = (now.getDay() + 6) % 7;
+      const loggedTodayFromDb = s.weekBuckets[todayIdx]?.netMs ?? 0;
+      const sessionNet =
+        session.state.phase !== "idle" &&
+        toLocalDateString(new Date(session.state.timeInMs)) === toLocalDateString(now)
+          ? session.derived.netMs
+          : 0;
+      const weekFromDb = s.weekBuckets.reduce((sum, b) => sum + b.netMs, 0);
+      setStats({
+        remainingMs: remainingTargetMs(DEFAULT_DAILY_TARGET_MS, loggedTodayFromDb + sessionNet),
+        loggedTodayMs: loggedTodayFromDb + sessionNet,
+        weekMs: weekFromDb + (session.state.phase !== "idle" ? session.derived.netMs : 0),
+        chips: formatTimelogDateChips(now),
+        weekBuckets: s.weekBuckets.map((b) => ({ netMs: b.netMs })),
+      });
+      setStatsError(s.error);
     };
     window.addEventListener("internlog-attendance-published", onPublished);
     return () =>
       window.removeEventListener("internlog-attendance-published", onPublished);
-  }, []);
+  }, [historyView, supabaseConfigured, loadCalendarMonth, loadListPage]);
 
   useEffect(() => {
     if (!publishToast) return;
@@ -72,13 +235,13 @@ export function TimeLogClient({
     return () => window.clearTimeout(t);
   }, [publishToast]);
 
-  const historySubtitle = fetchError
-    ? `Could not load data: ${fetchError}`
+  const historySubtitle = listError ?? calendarError
+    ? `Could not load data: ${listError ?? calendarError}`
     : !supabaseConfigured
       ? "Add Supabase env vars to load rows from the attendance table."
-      : initialRows.length > 0
-        ? `Showing ${initialRows.length} row(s) from Supabase (attendance).`
-        : "No rows yet. Publish a session below after Time Out, or check RLS policies.";
+      : historyView === "list"
+        ? `Showing ${listRows.length} of ${listTotalCount} row(s).`
+        : "Calendar loads the visible month only.";
 
   return (
     <PageContainer className="flex flex-col gap-8 lg:gap-10">
@@ -96,11 +259,7 @@ export function TimeLogClient({
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="flex items-start gap-3">
             <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-(--accent-muted) text-(--accent)">
-              <Icon
-                icon="mdi:clock-outline"
-                className="h-5 w-5"
-                aria-hidden
-              />
+              <Icon icon="mdi:clock-outline" className="h-5 w-5" aria-hidden />
             </span>
             <div>
               <h1
@@ -121,10 +280,10 @@ export function TimeLogClient({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-lg border border-(--card-border) bg-background px-3 py-1.5 text-xs font-medium text-(--muted)">
-              {stats.chips.weekLabel}
+              {displayStats.chips.weekLabel}
             </span>
             <span className="rounded-lg border border-(--card-border) bg-background px-3 py-1.5 text-xs font-medium text-(--muted)">
-              Today · {stats.chips.dateLabel}
+              Today · {displayStats.chips.dateLabel}
             </span>
           </div>
         </div>
@@ -135,12 +294,12 @@ export function TimeLogClient({
               Remaining today
             </p>
             <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-foreground">
-              {formatDurationMs(stats.remainingMs)}
+              {statsLoading ? "…" : formatDurationMs(displayStats.remainingMs)}
             </p>
             <p className="mt-1 text-xs text-(--muted)">
               Target {formatDurationMs(DEFAULT_DAILY_TARGET_MS)} · logged{" "}
               <span className="font-mono tabular-nums text-foreground">
-                {formatDurationMs(stats.loggedTodayMs)}
+                {statsLoading ? "…" : formatDurationMs(displayStats.loggedTodayMs)}
               </span>{" "}
               net
             </p>
@@ -150,7 +309,7 @@ export function TimeLogClient({
               Logged this week
             </p>
             <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-foreground">
-              {formatDurationMs(stats.weekMs)}
+              {statsLoading ? "…" : formatDurationMs(displayStats.weekMs)}
             </p>
             <p className="mt-1 text-xs text-(--muted)">
               Net work Mon–Sun (database + current session)
@@ -174,7 +333,7 @@ export function TimeLogClient({
               History
             </h2>
             <p
-              className={`mt-1 text-sm ${fetchError ? "text-red-400" : "text-(--muted)"}`}
+              className={`mt-1 text-sm ${listError ?? calendarError ? "text-red-400" : "text-(--muted)"}`}
             >
               {historySubtitle}
             </p>
@@ -224,86 +383,107 @@ export function TimeLogClient({
           </div>
         </div>
 
-        {fetchError ? (
+        {(listError ?? calendarError) ? (
           <div
             className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200"
             role="alert"
           >
-            Supabase: {fetchError}
+            Supabase: {listError ?? calendarError}
           </div>
         ) : null}
 
         {historyView === "calendar" ? (
-          <TimelogCalendar rows={initialRows} />
+          <TimelogCalendar
+            rows={calendarRows}
+            loading={calendarLoading}
+            onMonthChange={handleCalendarMonthChange}
+          />
         ) : (
           <div className="overflow-hidden rounded-2xl border border-(--card-border) bg-(--card) shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-(--card-border) bg-background/60 text-xs uppercase tracking-wider text-(--muted)">
-                  <th className="px-4 py-3 font-semibold lg:px-5">Date</th>
-                  <th className="px-4 py-3 font-semibold lg:px-5">Clock in</th>
-                  <th className="px-4 py-3 font-semibold lg:px-5">Clock out</th>
-                  <th className="px-4 py-3 font-semibold lg:px-5">Break</th>
-                  <th className="px-4 py-3 font-semibold lg:px-5">Gross</th>
-                  <th className="px-4 py-3 font-semibold lg:px-5">Net</th>
-                  <th className="px-4 py-3 font-semibold lg:px-5">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-(--card-border)">
-                {initialRows.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={7}
-                      className="px-4 py-10 text-center text-sm text-(--muted) lg:px-5"
-                    >
-                      No rows to show. Check Supabase RLS policies and that{" "}
-                      <code className="font-mono text-foreground">attendance</code> has
-                      data.
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-(--card-border) bg-background/60 text-xs uppercase tracking-wider text-(--muted)">
+                    <th className="px-4 py-3 font-semibold lg:px-5">Date</th>
+                    <th className="px-4 py-3 font-semibold lg:px-5">Clock in</th>
+                    <th className="px-4 py-3 font-semibold lg:px-5">Clock out</th>
+                    <th className="px-4 py-3 font-semibold lg:px-5">Break</th>
+                    <th className="px-4 py-3 font-semibold lg:px-5">Gross</th>
+                    <th className="px-4 py-3 font-semibold lg:px-5">Net</th>
+                    <th className="px-4 py-3 font-semibold lg:px-5">Status</th>
                   </tr>
-                ) : (
-                  initialRows.map((row) => (
-                    <tr
-                      key={row.id}
-                      className="transition-colors hover:bg-background/40"
-                    >
-                      <td className="px-4 py-4 font-medium text-foreground lg:px-5">
-                        {row.dayLabel}
-                      </td>
-                      <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
-                        {row.clockIn}
-                      </td>
-                      <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
-                        {row.clockOut}
-                      </td>
-                      <td className="px-4 py-4 font-mono text-(--muted) tabular-nums lg:px-5">
-                        {row.breakTime}
-                      </td>
-                      <td className="px-4 py-4 font-mono text-(--muted) tabular-nums lg:px-5">
-                        {row.duration}
-                      </td>
-                      <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
-                        {row.netDuration}
-                      </td>
-                      <td className="px-4 py-4 lg:px-5">
-                        {row.status === "complete" ? (
-                          <span className="inline-flex items-center rounded-full bg-emerald-500/12 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                            Complete
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center rounded-full bg-amber-500/12 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-400">
-                            Pending
-                          </span>
-                        )}
+                </thead>
+                <tbody className="divide-y divide-(--card-border)">
+                  {listLoading && listRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-(--muted) lg:px-5">
+                        Loading…
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : listRows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={7}
+                        className="px-4 py-10 text-center text-sm text-(--muted) lg:px-5"
+                      >
+                        No rows to show. Check Supabase RLS policies and that{" "}
+                        <code className="font-mono text-foreground">attendance</code> has data.
+                      </td>
+                    </tr>
+                  ) : (
+                    listRows.map((row) => (
+                      <tr
+                        key={row.id}
+                        className="transition-colors hover:bg-background/40"
+                      >
+                        <td className="px-4 py-4 font-medium text-foreground lg:px-5">
+                          {row.dayLabel}
+                        </td>
+                        <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
+                          {row.clockIn}
+                        </td>
+                        <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
+                          {row.clockOut}
+                        </td>
+                        <td className="px-4 py-4 font-mono text-(--muted) tabular-nums lg:px-5">
+                          {row.breakTime}
+                        </td>
+                        <td className="px-4 py-4 font-mono text-(--muted) tabular-nums lg:px-5">
+                          {row.duration}
+                        </td>
+                        <td className="px-4 py-4 font-mono text-foreground tabular-nums lg:px-5">
+                          {row.netDuration}
+                        </td>
+                        <td className="px-4 py-4 lg:px-5">
+                          {row.status === "complete" ? (
+                            <span className="inline-flex items-center rounded-full bg-emerald-500/12 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                              Complete
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full bg-amber-500/12 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-400">
+                              Pending
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {listHasMore && (
+              <div className="border-t border-(--card-border) p-3 text-center">
+                <button
+                  type="button"
+                  onClick={handleLoadMore}
+                  disabled={listLoading}
+                  className="rounded-lg border border-(--card-border) bg-background px-4 py-2 text-sm font-medium text-(--muted) transition-colors hover:bg-background/80 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {listLoading ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            )}
           </div>
-        </div>
         )}
       </section>
     </PageContainer>

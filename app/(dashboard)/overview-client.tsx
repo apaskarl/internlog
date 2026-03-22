@@ -5,17 +5,12 @@ import Link from "next/link";
 import { PageContainer } from "@/components/page-container";
 import { formatDurationMs } from "@/lib/attendance-time";
 import {
-  avgHoursPerWorkedDay,
-  countDaysWorked,
-  estimatedCompletionDate,
   formatTimelogDateChips,
   INTERNSHIP_TARGET_HOURS,
   INTERNSHIP_TARGET_MS,
-  totalNetMsCareer,
-  weekDayHoursForChart,
 } from "@/lib/timelog-stats";
 import type { WorkSessionState } from "@/lib/work-session";
-import type { TimelogTableRow } from "@/lib/types/timelog";
+import type { AttendanceStats } from "@/lib/get-attendance-stats";
 import { useWorkSession } from "@/components/work-session-provider";
 
 function phaseLabel(s: WorkSessionState): string {
@@ -41,38 +36,83 @@ function formatHoursOneDecimal(ms: number): string {
   });
 }
 
+/** Merge live session net into week buckets. Buckets are Mon(0)–Sun(6). */
+function mergeSessionIntoWeekBuckets(
+  buckets: { day: string; hours: number; netMs: number }[],
+  sessionNetMs: number,
+  sessionDate: Date,
+): { day: string; hours: number }[] {
+  if (sessionNetMs <= 0) {
+    return buckets.map((b) => ({ day: b.day, hours: b.hours }));
+  }
+  const dow = sessionDate.getDay(); // 0=Sun, 1=Mon, ...
+  const idx = (dow + 6) % 7; // Mon=0, Tue=1, ..., Sun=6
+  return buckets.map((b, i) => {
+    const baseHours = b.hours;
+    const add = i === idx ? sessionNetMs / (60 * 60 * 1000) : 0;
+    return {
+      day: b.day,
+      hours: Math.round((baseHours + add) * 100) / 100,
+    };
+  });
+}
+
+/** Estimated completion date from career ms and days worked. */
+function estimatedCompletionFromStats(
+  careerMs: number,
+  daysWorked: number,
+  targetMs: number,
+): Date | null {
+  if (careerMs >= targetMs || daysWorked <= 0) return null;
+  const remainingMs = targetMs - careerMs;
+  const avgHrsPerDay = careerMs / (60 * 60 * 1000) / daysWorked;
+  if (avgHrsPerDay <= 0) return null;
+  const daysNeeded = remainingMs / (60 * 60 * 1000) / avgHrsPerDay;
+  const d = new Date();
+  d.setDate(d.getDate() + Math.ceil(daysNeeded));
+  return d;
+}
+
 type Props = {
-  initialRows: TimelogTableRow[];
-  fetchError: string | null;
+  stats: AttendanceStats;
 };
 
-export function OverviewClient({ initialRows, fetchError }: Props) {
+export function OverviewClient({ stats }: Props) {
   const { state, derived, hydrated } = useWorkSession();
 
-  const now = new Date();
-  const chips = formatTimelogDateChips(now);
-  const careerMs = totalNetMsCareer(initialRows, state, derived.netMs);
+  const sessionNetMs =
+    state.phase !== "idle" ? derived.netMs : 0;
+  const careerMs = stats.totalNetMs + sessionNetMs;
   const progressPct = Math.min(
     100,
     Math.round((careerMs / INTERNSHIP_TARGET_MS) * 1000) / 10,
   );
   const remainingMs = Math.max(0, INTERNSHIP_TARGET_MS - careerMs);
 
-  const weekly = weekDayHoursForChart(
-    initialRows,
-    state,
-    derived.netMs,
-    now,
+  const sessionDate =
+    state.phase !== "idle"
+      ? new Date(state.timeInMs)
+      : null;
+  const weeklyWithSession = mergeSessionIntoWeekBuckets(
+    stats.weekBuckets,
+    sessionNetMs,
+    sessionDate ?? new Date(),
   );
-  const maxWeekHours = Math.max(...weekly.map((d) => d.hours), 0.01);
-  const daysWorked = countDaysWorked(initialRows);
-  const avgHrs = avgHoursPerWorkedDay(initialRows);
-  const estDate = estimatedCompletionDate(
-    initialRows,
-    state,
-    derived.netMs,
+  const maxWeekHours = Math.max(...weeklyWithSession.map((d) => d.hours), 0.01);
+
+  const daysWorked = stats.daysWorked;
+  const avgHrs =
+    daysWorked > 0
+      ? (careerMs / (60 * 60 * 1000)) / daysWorked
+      : 0;
+  const estDate = estimatedCompletionFromStats(
+    careerMs,
+    daysWorked,
     INTERNSHIP_TARGET_MS,
   );
+
+  const now = new Date();
+  const chips = formatTimelogDateChips(now);
 
   const timerLine =
     !hydrated || state.phase === "idle"
@@ -247,15 +287,15 @@ export function OverviewClient({ initialRows, fetchError }: Props) {
             </h2>
             <p className="mt-1 text-sm text-(--muted)">{chips.weekLabel}</p>
           </div>
-          {fetchError ? (
+          {stats.error ? (
             <p className="text-sm text-red-400" role="alert">
-              Could not load history: {fetchError}
+              Could not load stats: {stats.error}
             </p>
           ) : null}
         </div>
         <div className="mt-6 rounded-2xl border border-(--card-border) bg-(--card) p-6 shadow-sm">
           <div className="flex items-end justify-between gap-1 sm:gap-3">
-            {weekly.map((row) => {
+            {weeklyWithSession.map((row) => {
               const pct = (row.hours / maxWeekHours) * 100;
               return (
                 <div
