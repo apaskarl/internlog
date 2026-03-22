@@ -5,6 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useState } from "react";
+import { SessionStatusWidget } from "@/components/session-status-widget";
+import { USER_PROFILE } from "@/lib/user-profile";
 
 const NAV_ITEMS = [
   {
@@ -126,9 +128,23 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="border-t border-[var(--card-border)] p-4">
-          <div className="flex items-start gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--background)]/80 p-3 text-xs leading-relaxed text-[var(--muted)]">
-            <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-            Placeholder data — connect your backend later.
+          <div className="flex items-center gap-3 rounded-xl border border-[var(--card-border)] bg-[var(--background)]/80 p-3">
+            {/* eslint-disable-next-line @next/next/no-img-element -- external avatar URL */}
+            <img
+              src={USER_PROFILE.avatarUrl}
+              alt={USER_PROFILE.name}
+              width={44}
+              height={44}
+              className="h-11 w-11 shrink-0 rounded-full border border-[var(--card-border)] bg-[var(--background)] object-cover"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold leading-tight text-[var(--foreground)]">
+                {USER_PROFILE.name}
+              </p>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                ID {USER_PROFILE.idNumber}
+              </p>
+            </div>
           </div>
         </div>
       </aside>
@@ -161,11 +177,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               </p>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <span className="hidden items-center gap-2 rounded-full border border-[var(--card-border)] bg-[var(--background)] px-3 py-1.5 text-xs font-medium text-[var(--muted)] sm:inline-flex">
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-              Sample data
-            </span>
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <button
               type="button"
               onClick={() => signOut({ callbackUrl: "/login" })}
@@ -187,6 +199,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             Data shown is sample content.
           </p>
         </footer>
+
+        <SessionStatusWidget />
       </div>
     </div>
   );
